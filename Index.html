@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crow Shit</title>
+    <!-- Tone.js for sound effects -->
+    <script src="https://unpkg.com/tone@14.7.58/build/Tone.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f0f0;
+            touch-action: none;
+        }
+        canvas {
+            background-color: #87CEEB; /* Sky color */
+            border: 4px solid #333;
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+            touch-action: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-200 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <!-- Game Container -->
+    <div class="flex flex-col items-center">
+        <h1 class="text-4xl sm:text-5xl font-bold text-gray-800 mb-4 drop-shadow-md">Crow Shit</h1>
+        <div class="relative">
+            <!-- Updated canvas height to prevent it from being hidden -->
+            <canvas id="gameCanvas" width="360" height="500"></canvas>
+
+            <!-- Score and Instructions -->
+            <div id="game-info" class="absolute top-4 left-4 p-2 bg-white rounded-lg shadow-lg text-gray-800 font-bold">
+                Score: <span id="score-display">0</span>
+            </div>
+            <div id="instructions" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center text-white text-lg sm:text-2xl font-bold p-4 rounded-lg bg-black bg-opacity-50">
+                Tap or hold to charge your shits!
+            </div>
+        </div>
+
+        <!-- Game Over Modal (initially hidden) -->
+        <div id="game-over-modal" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden">
+            <div class="bg-white p-8 rounded-lg shadow-2xl text-center max-w-sm">
+                <h2 class="text-3xl font-bold text-gray-900 mb-4">Game Over!</h2>
+                <p class="text-lg text-gray-700 mb-4">Final Score: <span id="final-score" class="font-extrabold text-indigo-600">0</span></p>
+                <button id="restart-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition transform hover:scale-105">Play Again</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const scoreDisplay = document.getElementById('score-display');
+            const instructions = document.getElementById('instructions');
+            const gameOverModal = document.getElementById('game-over-modal');
+            const finalScoreDisplay = document.getElementById('final-score');
+            const restartBtn = document.getElementById('restart-btn');
+
+            let score = 0;
+            let isGameOver = false;
+            let gameSpeed = 3;
+            let cars = [];
+            let poops = [];
+            let carSpawnTimer = 0;
+            const carSpawnInterval = 90;
+            const roadLineSpeed = 5;
+            let roadLineOffset = 0;
+
+            let isCharging = false;
+            let isChargedSoundPlayed = false; // Flag to play the sound only once
+            const initialPoopSize = 10;
+            const maxPoopSize = initialPoopSize * 3;
+            let currentPoopSize = initialPoopSize;
+            const chargeRate = 0.2;
+
+            // --- Sound Effects ---
+            const splatSynth = new Tone.Synth({
+                oscillator: { type: "square" },
+                envelope: {
+                    attack: 0.001,
+                    decay: 0.1,
+                    sustain: 0,
+                    release: 0.1
+                }
+            }).toDestination();
+
+            const chargeSynth = new Tone.Synth({
+                oscillator: { type: "sine" },
+                envelope: {
+                    attack: 0.01,
+                    decay: 0.1,
+                    sustain: 0.1,
+                    release: 0.2
+                }
+            }).toDestination();
+            
+            // --- End Sound Effects ---
+
+            const bird = {
+                x: canvas.width / 2,
+                y: 60,
+                poop: function(size) {
+                    poops.push({
+                        x: this.x,
+                        y: this.y + 10,
+                        size: size,
+                        velocityY: 0
+                    });
+                }
+            };
+
+            const carColors = ['#e74c3c', '#2c3e50', '#f1c40f', '#3498db', '#9b59b6'];
+
+            function createCar() {
+                const carWidth = 60;
+                const carHeight = 30;
+                cars.push({
+                    x: Math.random() < 0.5 ? -carWidth : canvas.width,
+                    // Cars now spawn in a single, centered lane
+                    y: canvas.height - 150,
+                    width: carWidth,
+                    height: carHeight,
+                    color: carColors[Math.floor(Math.random() * carColors.length)],
+                    speed: gameSpeed * (Math.random() * 0.5 + 0.75) * (Math.random() < 0.5 ? 1 : -1)
+                });
+            }
+
+            function drawBird() {
+                ctx.fillStyle = '#000000'; // Black color for the crow
+
+                // Body
+                ctx.beginPath();
+                ctx.moveTo(bird.x - 20, bird.y);
+                ctx.quadraticCurveTo(bird.x, bird.y - 25, bird.x + 20, bird.y - 10);
+                ctx.quadraticCurveTo(bird.x + 10, bird.y + 15, bird.x - 20, bird.y);
+                ctx.fill();
+
+                // Head
+                ctx.beginPath();
+                ctx.arc(bird.x + 10, bird.y - 10, 8, 0, Math.PI * 2, true);
+                ctx.fill();
+
+                // Beak
+                ctx.beginPath();
+                ctx.moveTo(bird.x + 18, bird.y - 12);
+                ctx.lineTo(bird.x + 30, bird.y - 8);
+                ctx.lineTo(bird.x + 18, bird.y - 4);
+                ctx.fill();
+
+                // Tail
+                ctx.beginPath();
+                ctx.moveTo(bird.x - 20, bird.y);
+                ctx.lineTo(bird.x - 35, bird.y + 10);
+                ctx.lineTo(bird.x - 25, bird.y + 5);
+                ctx.fill();
+            }
+
+            function drawCars() {
+                cars.forEach(car => {
+                    ctx.fillStyle = car.color;
+                    ctx.fillRect(car.x, car.y, car.width, car.height);
+                    
+                    ctx.fillStyle = '#bdc3c7';
+                    ctx.fillRect(car.x + 5, car.y + 5, car.width - 10, car.height / 2);
+                });
+            }
+
+            function drawPoops() {
+                poops.forEach(poop => {
+                    ctx.font = `${poop.size}px serif`;
+                    ctx.fillText('💩', poop.x - poop.size / 2, poop.y);
+                });
+            }
+
+            function drawChargingPoop() {
+                if (isCharging) {
+                    ctx.font = `${currentPoopSize}px serif`;
+                    ctx.fillText('💩', bird.x - currentPoopSize / 2, bird.y + 20);
+                }
+            }
+
+            function drawHighway() {
+                ctx.fillStyle = '#6c7a89';
+                // Adjusted the highway position to match the new canvas size
+                ctx.fillRect(0, canvas.height - 170, canvas.width, 100);
+
+                // Removed the vertical road lines
+            }
+
+            function update() {
+                if (isGameOver) return;
+
+                if (isCharging) {
+                    currentPoopSize = Math.min(maxPoopSize, currentPoopSize + chargeRate);
+                    // Play charge sound only once when it hits max size
+                    if (currentPoopSize >= maxPoopSize && !isChargedSoundPlayed) {
+                        chargeSynth.triggerAttackRelease("C5", "8n");
+                        isChargedSoundPlayed = true;
+                    }
+                }
+
+                roadLineOffset += roadLineSpeed;
+                if (roadLineOffset >= 40) {
+                    roadLineOffset = 0;
+                }
+
+                cars.forEach(car => {
+                    car.x += car.speed;
+                });
+
+                poops.forEach(poop => {
+                    poop.y += poop.velocityY;
+                    poop.velocityY += 0.5;
+                });
+
+                poops.forEach((poop, poopIndex) => {
+                    cars.forEach((car, carIndex) => {
+                        const poopSizeHalf = poop.size / 2;
+                        if (poop.x + poopSizeHalf > car.x && poop.x - poopSizeHalf < car.x + car.width &&
+                            poop.y > car.y && poop.y < car.y + car.height) {
+                            
+                            score += Math.round(poop.size / initialPoopSize) * 10;
+                            scoreDisplay.textContent = score;
+
+                            // Play splat sound
+                            splatSynth.triggerAttackRelease("G2", "8n");
+
+                            ctx.font = `${poop.size + 10}px serif`;
+                            ctx.fillText('💩', car.x + car.width / 2 - poop.size, car.y + car.height / 2);
+
+                            cars.splice(carIndex, 1);
+                            poops.splice(poopIndex, 1);
+                            
+                            gameSpeed += 0.1;
+                        }
+                    });
+                });
+
+                cars = cars.filter(car => car.x + car.width > 0 && car.x < canvas.width);
+                poops = poops.filter(poop => poop.y < canvas.height);
+
+                carSpawnTimer++;
+                if (carSpawnTimer >= carSpawnInterval) {
+                    createCar();
+                    carSpawnTimer = 0;
+                }
+            }
+
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawHighway();
+                drawBird();
+                drawCars();
+                drawPoops();
+                drawChargingPoop();
+            }
+
+            function gameLoop() {
+                if (!isGameOver) {
+                    update();
+                    draw();
+                    requestAnimationFrame(gameLoop);
+                }
+            }
+
+            function endGame() {
+                isGameOver = true;
+                finalScoreDisplay.textContent = score;
+                gameOverModal.style.display = 'flex';
+            }
+
+            function startGame() {
+                isGameOver = false;
+                score = 0;
+                gameSpeed = 3;
+                cars = [];
+                poops = [];
+                currentPoopSize = initialPoopSize;
+                scoreDisplay.textContent = score;
+                gameOverModal.style.display = 'none';
+                instructions.style.display = 'block';
+                gameLoop();
+            }
+
+            // Mouse and touch event listeners for charging and dropping
+            window.addEventListener('mousedown', () => {
+                if (isGameOver) return;
+                instructions.style.display = 'none';
+                isCharging = true;
+                isChargedSoundPlayed = false; // Reset the flag
+            });
+            window.addEventListener('mouseup', () => {
+                if (isCharging) {
+                    bird.poop(currentPoopSize);
+                    isCharging = false;
+                    currentPoopSize = initialPoopSize;
+                }
+            });
+            window.addEventListener('touchstart', (e) => {
+                if (isGameOver) return;
+                instructions.style.display = 'none';
+                isCharging = true;
+                isChargedSoundPlayed = false; // Reset the flag
+            });
+            window.addEventListener('touchend', (e) => {
+                if (isCharging) {
+                    bird.poop(currentPoopSize);
+                    isCharging = false;
+                    currentPoopSize = initialPoopSize;
+                }
+            });
+
+            restartBtn.addEventListener('click', startGame);
+
+            window.onload = startGame;
+        });
+    </script>
+</body>
+</html>
+
