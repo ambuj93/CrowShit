@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crow Shit 3D</title>
+    <!-- Tone.js for sound effects -->
+    <script src="https://unpkg.com/tone@14.7.58/build/Tone.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+            background-color: #3498db; /* Darker blue background */
+        }
+        #gameCanvas {
+            background-color: #87CEEB; /* Sky color */
+            border: 4px solid #333;
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+            /* Ensure the canvas scales responsively */
+            max-width: 90vw;
+            max-height: 80vh;
+            touch-action: none;
+        }
+        /* Custom styles for the 3D road effect and general UI */
+        .game-container {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body class="bg-gray-800 flex flex-col items-center justify-center min-h-screen p-2 sm:p-4 overflow-hidden">
+
+    <!-- Game Container -->
+    <div class="game-container flex flex-col items-center">
+        <h1 class="text-4xl sm:text-5xl font-extrabold text-white mb-4 drop-shadow-lg">Crow Shit 3D</h1>
+        <div class="relative flex justify-center items-center">
+            
+            <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+            <!-- Score and Instructions -->
+            <div id="game-info" class="absolute top-4 left-4 p-2 bg-yellow-300 rounded-lg shadow-xl text-gray-900 font-extrabold text-lg sm:text-xl">
+                Score: <span id="score-display">0</span>
+            </div>
+            
+            <div id="instructions" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center text-white text-lg sm:text-2xl font-bold p-4 rounded-lg bg-black bg-opacity-70 shadow-2xl">
+                <p class="mb-2">Swipe/Move Mouse to position the Crow.</p>
+                <p>Tap or hold to charge and drop a 💩!</p>
+            </div>
+        </div>
+
+        <!-- Game Over Modal (initially hidden) -->
+        <div id="game-over-modal" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center hidden z-50">
+            <div class="bg-white p-8 rounded-xl shadow-2xl text-center max-w-sm w-11/12 border-4 border-yellow-500 transform transition-all">
+                <h2 class="text-4xl font-extrabold text-red-600 mb-4 animate-bounce">Game Over!</h2>
+                <p class="text-xl text-gray-700 mb-6">Final Score: <span id="final-score" class="font-extrabold text-indigo-600 text-3xl">0</span></p>
+                <button id="restart-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-full shadow-xl transition transform hover:scale-105 active:scale-95 text-lg">
+                    Play Again
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const scoreDisplay = document.getElementById('score-display');
+            const instructions = document.getElementById('instructions');
+            const gameOverModal = document.getElementById('game-over-modal');
+            const finalScoreDisplay = document.getElementById('final-score');
+            const restartBtn = document.getElementById('restart-btn');
+
+            let score = 0;
+            let isGameOver = false;
+            let gameSpeed = 3; // Base movement speed
+            let cars = [];
+            let poops = [];
+            let carSpawnTimer = 0;
+            const carSpawnInterval = 60; // How frequently cars spawn (frames)
+            
+            // --- Game State for Charging ---
+            let isCharging = false;
+            let isChargedSoundPlayed = false; 
+            const initialPoopSize = 10;
+            const maxPoopSize = initialPoopSize * 3;
+            let currentPoopSize = initialPoopSize;
+            const chargeRate = 0.4;
+            let lastX = 0; // For tracking mouse/touch movement
+
+            // --- Game Constants (Responsive) ---
+            const BIRD_Y = 60; // Fixed Y position for the crow
+            const ROAD_START_Y_RATIO = 0.5; // Road starts halfway down the canvas
+            let ROAD_START_Y;
+
+            // Lane configuration - Relative to canvas width (0.2, 0.5, 0.8)
+            const LANE_POSITIONS_RATIOS = [0.25, 0.5, 0.75];
+            const NUM_LANES = LANE_POSITIONS_RATIOS.length;
+            let LANE_X_POSITIONS; 
+
+            // --- Sound Effects ---
+            const splatSynth = new Tone.Synth({
+                oscillator: { type: "sine" },
+                envelope: {
+                    attack: 0.005, decay: 0.1, sustain: 0, release: 0.1
+                }
+            }).toDestination();
+
+            const chargeSynth = new Tone.MembraneSynth({
+                octaves: 5,
+                pitchDecay: 0.05,
+                envelope: {
+                    attack: 0.01, decay: 0.4, sustain: 0.1, release: 0.5
+                }
+            }).toDestination();
+            
+            // --- Game Objects (Moved up to fix the ReferenceError) ---
+
+            const bird = {
+                x: canvas.width / 2,
+                y: BIRD_Y,
+                width: 40,
+                poop: function(size) {
+                    poops.push({
+                        x: this.x,
+                        y: this.y + 10,
+                        size: size,
+                        velocityY: 0,
+                        // Gravity only affects poops, not cars
+                        gravity: 0.5
+                    });
+                    chargeSynth.triggerAttackRelease("A3", "16n", Tone.now(), 0.5);
+                }
+            };
+
+            const carColors = ['#e74c3c', '#2c3e50', '#f1c40f', '#3498db', '#9b59b6', '#1abc9c', '#f39c12', '#95a5a6'];
+
+
+            // --- Helper Functions ---
+
+            function resizeCanvas() {
+                // Keep aspect ratio roughly 3:4 (width:height)
+                const containerWidth = window.innerWidth;
+                const containerHeight = window.innerHeight;
+
+                let newWidth, newHeight;
+                
+                // Max size constraints
+                const maxWidth = 500;
+                const maxHeight = 700;
+
+                // Determine the limiting factor
+                const widthLimit = Math.min(containerWidth * 0.9, maxWidth);
+                const heightLimit = Math.min(containerHeight * 0.8, maxHeight);
+
+                // Calculate based on 3:4 ratio
+                if (widthLimit * 4 / 3 < heightLimit) {
+                    newWidth = widthLimit;
+                    newHeight = newWidth * 4 / 3;
+                } else {
+                    newHeight = heightLimit;
+                    newWidth = newHeight * 3 / 4;
+                }
+
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+
+                ROAD_START_Y = canvas.height * ROAD_START_Y_RATIO;
+                LANE_X_POSITIONS = LANE_POSITIONS_RATIOS.map(ratio => canvas.width * ratio);
+                
+                // Initial bird position
+                bird.x = canvas.width / 2;
+                lastX = bird.x;
+            }
+
+            // Call resize once on load and on window resize
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+
+            function createCar() {
+                // Determine direction: 1 (right to left) or -1 (left to right)
+                // Direction is not used for movement in the perspective setup, but could be for future features
+                const direction = Math.random() < 0.5 ? 1 : -1; 
+                
+                // Determine which lane
+                const laneIndex = Math.floor(Math.random() * NUM_LANES);
+                
+                // Cars spawn at the far end of the road (high Y, high perspective)
+                const startY = ROAD_START_Y + 5;
+                
+                cars.push({
+                    x: LANE_X_POSITIONS[laneIndex], // Center point of the lane
+                    y: startY,
+                    initialSpeed: gameSpeed * (Math.random() * 0.5 + 0.75),
+                    direction: direction,
+                    laneIndex: laneIndex,
+                    color: carColors[Math.floor(Math.random() * carColors.length)],
+                    hit: false // Track if hit
+                });
+            }
+
+            // --- Drawing Functions ---
+
+            function drawBird() {
+                ctx.fillStyle = '#000000'; // Black crow
+                const x = bird.x;
+                const y = bird.y;
+                
+                // Wings - animated slightly for effect (simple sine wave)
+                const wingAmplitude = 5;
+                const wingOffset = Math.sin(Date.now() / 150) * wingAmplitude;
+
+                // Body (Triangle/Rounded shape)
+                ctx.beginPath();
+                ctx.moveTo(x - 15, y + 5);
+                ctx.quadraticCurveTo(x, y - 20, x + 15, y + 5);
+                ctx.fill();
+
+                // Head
+                ctx.beginPath();
+                ctx.arc(x + 5, y - 15, 8, 0, Math.PI * 2, true);
+                ctx.fill();
+                
+                // Beak
+                ctx.fillStyle = '#f39c12';
+                ctx.beginPath();
+                ctx.moveTo(x + 13, y - 17);
+                ctx.lineTo(x + 23, y - 14);
+                ctx.lineTo(x + 13, y - 11);
+                ctx.fill();
+
+                // Wings (simple lines for now)
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(x - 15, y);
+                ctx.lineTo(x - 30, y + wingOffset);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(x + 15, y);
+                ctx.lineTo(x + 30, y + wingOffset);
+                ctx.stroke();
+            }
+
+            function drawCars() {
+                cars.forEach(car => {
+                    if (car.hit) {
+                        // Don't draw car if hit
+                        return; 
+                    }
+
+                    // Perspective Scaling:
+                    // Scale factor based on distance from the bird (closer to canvas bottom = larger)
+                    const scaleFactor = 1 + (car.y - ROAD_START_Y) / (canvas.height - ROAD_START_Y) * 2.5; 
+                    
+                    const carWidth = 20 * scaleFactor;
+                    const carHeight = 10 * scaleFactor;
+
+                    // Centered X position based on lane
+                    const centerX = car.x;
+                    const drawX = centerX - carWidth / 2;
+                    
+                    ctx.fillStyle = car.color;
+                    
+                    // Main Car Body (FIX: Use fillRect for better compatibility and performance)
+                    ctx.fillRect(drawX, car.y, carWidth, carHeight);
+                    
+                    // Windows (lighter color)
+                    ctx.fillStyle = '#bdc3c7';
+                    const windowWidth = carWidth * 0.6;
+                    const windowHeight = carHeight * 0.4;
+                    ctx.fillRect(centerX - windowWidth / 2, car.y + carHeight * 0.1, windowWidth, windowHeight);
+
+                    // Wheels (simple dark circles)
+                    ctx.fillStyle = '#333';
+                    const wheelRadius = carHeight / 4;
+                    ctx.beginPath();
+                    ctx.arc(drawX + wheelRadius * 1.5, car.y + carHeight + 1, wheelRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(drawX + carWidth - wheelRadius * 1.5, car.y + carHeight + 1, wheelRadius, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            }
+
+            function drawPoops() {
+                poops.forEach(poop => {
+                    ctx.font = `${poop.size}px serif`;
+                    // Poop is 💩
+                    ctx.fillText('💩', poop.x - poop.size / 2, poop.y);
+                });
+            }
+
+            function drawChargingPoop() {
+                if (isCharging) {
+                    ctx.font = `${currentPoopSize}px serif`;
+                    ctx.fillText('💩', bird.x - currentPoopSize / 2, bird.y + 20);
+                }
+            }
+
+            function drawHighway() {
+                // Background Road (Trapezoid for perspective)
+                ctx.fillStyle = '#6c7a89'; // Asphalt gray
+                ctx.beginPath();
+                // Top edge (far away)
+                ctx.moveTo(0, ROAD_START_Y); 
+                ctx.lineTo(canvas.width, ROAD_START_Y);
+                // Bottom edge (near)
+                ctx.lineTo(canvas.width, canvas.height); 
+                ctx.lineTo(0, canvas.height);
+                ctx.closePath();
+                ctx.fill();
+
+                // Lane Lines
+                const lineDashLength = 20;
+                const lineGap = 20;
+                
+                ctx.strokeStyle = '#f1c40f'; // Yellow lines
+                ctx.lineWidth = 3;
+                ctx.setLineDash([lineDashLength, lineGap]);
+
+                // Draw each lane divider
+                for (let i = 0; i < NUM_LANES - 1; i++) {
+                    const centerLeft = LANE_X_POSITIONS[i] + (LANE_X_POSITIONS[i+1] - LANE_X_POSITIONS[i]) / 2;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(centerLeft, ROAD_START_Y);
+                    ctx.lineTo(centerLeft, canvas.height);
+                    ctx.stroke();
+                }
+
+                ctx.setLineDash([]); // Reset line dash
+            }
+
+            // --- Game Logic ---
+
+            function update() {
+                if (isGameOver) return;
+
+                // 1. Update Charging State
+                if (isCharging) {
+                    currentPoopSize = Math.min(maxPoopSize, currentPoopSize + chargeRate);
+                    if (currentPoopSize >= maxPoopSize && !isChargedSoundPlayed) {
+                        chargeSynth.triggerAttackRelease("C5", "8n");
+                        isChargedSoundPlayed = true;
+                    }
+                }
+
+                // 2. Update Cars (Moving towards player)
+                cars.forEach(car => {
+                    // Car speed increases as it gets closer (simple Y scaling)
+                    const speedMultiplier = 1 + (car.y - ROAD_START_Y) / (canvas.height - ROAD_START_Y) * 3; 
+                    
+                    // Move the car down the perspective road (Y changes)
+                    car.y += car.initialSpeed * speedMultiplier * 0.1; 
+                });
+
+                // 3. Update Poops (Falling)
+                poops.forEach(poop => {
+                    poop.y += poop.velocityY;
+                    poop.velocityY += poop.gravity; // Apply gravity
+                });
+
+                // 4. Collision Detection (Poop hits Car)
+                poops.forEach((poop, poopIndex) => {
+                    cars.forEach((car, carIndex) => {
+                        // Only check collision for poops above the highway start line
+                        if (poop.y < ROAD_START_Y || car.hit) return;
+
+                        // Recalculate Car Dimensions for collision check based on Y
+                        const scaleFactor = 1 + (car.y - ROAD_START_Y) / (canvas.height - ROAD_START_Y) * 2.5; 
+                        const carWidth = 20 * scaleFactor;
+                        const carHeight = 10 * scaleFactor;
+                        const carX = car.x - carWidth / 2;
+                        const carY = car.y; // Top Y position
+
+                        const poopSizeHalf = poop.size / 2;
+                        
+                        // Collision check (simple AABB)
+                        const hitX = poop.x + poopSizeHalf > carX && poop.x - poopSizeHalf < carX + carWidth;
+                        const hitY = poop.y > carY && poop.y < carY + carHeight;
+                        
+                        if (hitX && hitY) {
+                            
+                            car.hit = true; // Mark car as hit
+                            
+                            // Score Calculation: larger poop = more points
+                            const points = Math.round(poop.size / initialPoopSize) * 25;
+                            score += points;
+                            scoreDisplay.textContent = score;
+
+                            // Play splat sound
+                            splatSynth.triggerAttackRelease("D3", "8n", Tone.now(), 0.8);
+                            
+                            // Remove poop immediately
+                            poops.splice(poopIndex, 1);
+                            
+                            // Game speed up
+                            gameSpeed += 0.05; 
+                            
+                            // Since we splice poops, we need to return from this inner loop to avoid iterating over removed elements.
+                            // The outer loop's index management will handle the next poop.
+                            return; 
+                        }
+                    });
+                });
+
+                // 5. Game Over Check
+                // If a non-hit car reaches the bottom of the screen, it's game over.
+                const missedCar = cars.find(car => car.y >= canvas.height && !car.hit);
+                if (missedCar) {
+                     endGame();
+                     return;
+                }
+
+                // 6. Cleanup (Filter out cars that are off-screen or were hit)
+                cars = cars.filter(car => !car.hit && car.y < canvas.height + 50);
+                poops = poops.filter(poop => poop.y < canvas.height); 
+
+                // 7. Car Spawning
+                carSpawnTimer++;
+                // Decrease interval as speed increases (faster cars = more frequent spawns)
+                const currentInterval = Math.max(30, carSpawnInterval - (gameSpeed - 3) * 5);
+                
+                if (carSpawnTimer >= currentInterval) {
+                    createCar();
+                    carSpawnTimer = 0;
+                }
+            }
+
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                drawHighway();
+                drawBird();
+                drawCars();
+                drawPoops();
+                drawChargingPoop();
+            }
+
+            function gameLoop() {
+                if (!isGameOver) {
+                    update();
+                    draw();
+                    requestAnimationFrame(gameLoop);
+                }
+            }
+
+            function endGame() {
+                isGameOver = true;
+                finalScoreDisplay.textContent = score;
+                gameOverModal.style.display = 'flex';
+                // Stop any charging sound feedback
+                chargeSynth.triggerRelease(); 
+            }
+
+            function startGame() {
+                isGameOver = false;
+                score = 0;
+                gameSpeed = 3;
+                cars = [];
+                poops = [];
+                currentPoopSize = initialPoopSize;
+                scoreDisplay.textContent = score;
+                gameOverModal.style.display = 'none';
+                instructions.style.display = 'block';
+                carSpawnTimer = 0;
+                resizeCanvas(); // Ensure canvas is correctly sized before starting
+                gameLoop();
+            }
+
+            // --- Input Handlers (Crow Movement and Pooping) ---
+
+            const handlePointerDown = (e) => {
+                if (isGameOver) return;
+                instructions.style.display = 'none';
+                isCharging = true;
+                isChargedSoundPlayed = false;
+                
+                // Prevent default scrolling on touch devices
+                e.preventDefault(); 
+            };
+
+            const handlePointerUp = () => {
+                if (isCharging) {
+                    bird.poop(currentPoopSize);
+                    isCharging = false;
+                    currentPoopSize = initialPoopSize;
+                }
+            };
+            
+            const handlePointerMove = (e) => {
+                if (isGameOver) return;
+                
+                const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                if (!clientX) return;
+
+                const rect = canvas.getBoundingClientRect();
+                
+                // Calculate new bird X position based on pointer relative to canvas
+                let newX = clientX - rect.left;
+
+                // Constrain bird movement within the canvas boundaries
+                newX = Math.max(bird.width / 2, Math.min(canvas.width - bird.width / 2, newX));
+
+                bird.x = newX;
+                lastX = clientX; // Update last X for subsequent moves
+            };
+            
+            // Add global listeners for movement and actions
+            window.addEventListener('mousedown', handlePointerDown);
+            window.addEventListener('mouseup', handlePointerUp);
+            window.addEventListener('touchstart', handlePointerDown);
+            window.addEventListener('touchend', handlePointerUp);
+            window.addEventListener('mousemove', handlePointerMove);
+            window.addEventListener('touchmove', handlePointerMove, { passive: false });
+
+
+            // Prevent context menu on touch/hold
+            window.oncontextmenu = (e) => { e.preventDefault(); };
+
+            restartBtn.addEventListener('click', startGame);
+
+            window.onload = startGame;
+        });
+    </script>
+</body>
+</html>
